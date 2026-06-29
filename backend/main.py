@@ -5,7 +5,7 @@ from database import Base, engine, get_db
 from models import User, Lead, Appointment, ChatMessage
 from schemas import LoginRequest, LeadCreate, LeadUpdate, AppointmentCreate, AppointmentUpdate, StatusUpdate, ChatRequest
 from auth import hash_password, verify_password, create_token, require_admin
-from chatbot import get_ai_reply
+from chatbot import extract_appointment_details, get_ai_reply, missing_appointment_fields
 from calendar_service import create_calendar_event
 from email_service import send_appointment_confirmation
 
@@ -43,11 +43,59 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 async def chat(payload: ChatRequest, db: Session = Depends(get_db)):
     user_msg = ChatMessage(sender="user", message=payload.message)
     db.add(user_msg)
-    reply = await get_ai_reply(payload.message)
+    details = extract_appointment_details(payload.message)
+    missing = missing_appointment_fields(details)
+    appointment = None
+    lead = None
+    if details and not missing:
+        lead = Lead(
+            name=details["name"],
+            email=details["email"],
+            phone=details["phone"],
+            message=payload.message,
+            status="New",
+        )
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+        event_id, calendar_error = create_calendar_event(
+            details["name"],
+            details["email"],
+            details["service"],
+            details["date"],
+            details["time"],
+        )
+        appointment = Appointment(
+            lead_id=lead.id,
+            service=details["service"],
+            appointment_date=details["date"],
+            appointment_time=details["time"],
+            status="Pending",
+            google_calendar_event_id=event_id,
+        )
+        db.add(appointment)
+        db.commit()
+        db.refresh(appointment)
+        send_appointment_confirmation(
+            to_email=details["email"],
+            name=details["name"],
+            service=details["service"],
+            appointment_date=details["date"],
+            appointment_time=details["time"],
+        )
+        reply = "Your appointment request has been created successfully."
+    elif details and missing:
+        reply = f"Thanks. Please share your {', '.join(missing)} so I can create the appointment request."
+    else:
+        reply = await get_ai_reply(payload.message)
     bot_msg = ChatMessage(sender="bot", message=reply)
     db.add(bot_msg)
     db.commit()
-    return {"reply": reply}
+    response = {"reply": reply, "appointment_created": appointment is not None}
+    if appointment:
+        response["appointment"] = appointment
+        response["lead"] = lead
+    return response
 
 @app.post("/leads")
 def create_lead(payload: LeadCreate, db: Session = Depends(get_db), admin: dict = Depends(require_admin)):

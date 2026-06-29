@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowRight, Bot, CalendarDays, CheckCircle, Clock, LayoutDashboard, LogOut, RefreshCw, Search, Send, ShieldCheck, Sparkles, Trash2, Users, XCircle } from 'lucide-react';
+import { ArrowRight, Bot, CalendarDays, Check, CheckCircle, Clock, Edit3, LayoutDashboard, LogOut, RefreshCw, Search, Send, ShieldCheck, Sparkles, Trash2, Users, X, XCircle } from 'lucide-react';
 import './style.css';
 
 const API = 'http://127.0.0.1:8001';
@@ -119,10 +119,10 @@ function Chat() {
     const text = input.trim();
     setInput('');
     setBusy(true);
-    setMessages(items => [...items, { sender: 'user', text }]);
+      setMessages(items => [...items, { sender: 'user', text }]);
     try {
       const data = await api('/chat', { method: 'POST', body: JSON.stringify({ message: text }) });
-      setMessages(items => [...items, { sender: 'bot', text: data.reply }]);
+      setMessages(items => [...items, { sender: data.appointment_created ? 'success' : 'bot', text: data.reply }]);
     } catch {
       setMessages(items => [...items, { sender: 'bot', text: 'Backend is not connected. Please start the FastAPI server.' }]);
     } finally {
@@ -237,8 +237,18 @@ function Admin({ stats, leads, appointments, refresh, token }) {
     refresh();
   };
 
+  const saveAppointment = async (id, values) => {
+    await api(`/appointments/${id}`, { method: 'PUT', body: JSON.stringify(values) }, token);
+    refresh();
+  };
+
   const updateLead = async (id, nextStatus) => {
     await api(`/leads/${id}`, { method: 'PUT', body: JSON.stringify({ status: nextStatus }) }, token);
+    refresh();
+  };
+
+  const saveLead = async (id, values) => {
+    await api(`/leads/${id}`, { method: 'PUT', body: JSON.stringify(values) }, token);
     refresh();
   };
 
@@ -275,7 +285,7 @@ function Admin({ stats, leads, appointments, refresh, token }) {
         onStatus={setAppointmentStatus}
         onClear={() => { setAppointmentQuery(''); setAppointmentStatus('All'); }}
       />
-      <AppointmentsTable rows={filteredAppointments} leads={leadById} update={updateAppointment} remove={remove} />
+      <AppointmentsTable rows={filteredAppointments} leads={leadById} update={updateAppointment} save={saveAppointment} remove={remove} />
     </> : <>
       <FilterPanel
         title="Lead Filters"
@@ -289,7 +299,7 @@ function Admin({ stats, leads, appointments, refresh, token }) {
         onStatus={setLeadStatus}
         onClear={() => { setLeadQuery(''); setLeadStatus('All'); }}
       />
-      <LeadsTable rows={filteredLeads} update={updateLead} remove={remove} />
+      <LeadsTable rows={filteredLeads} update={updateLead} save={saveLead} remove={remove} />
     </>}
   </section>;
 }
@@ -321,29 +331,83 @@ function FilterPanel({ title, searchValue, statusValue, statusOptions, placehold
   </div>;
 }
 
-function AppointmentsTable({ rows, leads, update, remove }) {
+function AppointmentsTable({ rows, leads, update, save, remove }) {
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState({});
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setDraft({
+      service: item.service,
+      appointment_date: item.appointment_date,
+      appointment_time: item.appointment_time,
+      status: item.status,
+    });
+  };
+  const saveEdit = async (id) => {
+    await save(id, draft);
+    setEditingId(null);
+    setDraft({});
+  };
   return <table>
     <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Service</th><th>Date</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
-    <tbody>{rows.length === 0 && <EmptyRow columns={9} message="No appointments match the current filters." />}{rows.map(item => <tr key={item.id}>
+    <tbody>{rows.length === 0 && <EmptyRow columns={9} message="No appointments match the current filters." />}{rows.map(item => {
+      const editing = editingId === item.id;
+      return <tr key={item.id}>
       <td>{item.id}</td>
       <td>{leads.get(item.lead_id)?.name || 'Unassigned'}</td>
       <td>{leads.get(item.lead_id)?.email || '-'}</td>
       <td>{leads.get(item.lead_id)?.phone || '-'}</td>
-      <td>{item.service}</td><td>{item.appointment_date}</td><td>{item.appointment_time}</td>
-      <td><select className="form-select form-select-sm" value={item.status} onChange={e => update(item.id, e.target.value)}>{statuses.map(s => <option key={s}>{s}</option>)}</select></td>
-      <td><button className="danger" onClick={() => remove('appointments', item.id)}><Trash2 size={16} /> Delete</button></td>
-    </tr>)}</tbody>
+      <td>{editing ? <input className="table-input" value={draft.service} onChange={e => setDraft({ ...draft, service: e.target.value })} /> : item.service}</td>
+      <td>{editing ? <input className="table-input" type="date" value={draft.appointment_date} onChange={e => setDraft({ ...draft, appointment_date: e.target.value })} /> : item.appointment_date}</td>
+      <td>{editing ? <input className="table-input" type="time" value={draft.appointment_time} onChange={e => setDraft({ ...draft, appointment_time: e.target.value })} /> : item.appointment_time}</td>
+      <td><select className="form-select form-select-sm" value={editing ? draft.status : item.status} onChange={e => editing ? setDraft({ ...draft, status: e.target.value }) : update(item.id, e.target.value)}>{statuses.map(s => <option key={s}>{s}</option>)}</select></td>
+      <td><div className="table-actions">{editing ? <>
+        <button className="primary icon-action" onClick={() => saveEdit(item.id)}><Check size={16} /> Save</button>
+        <button className="icon-action" onClick={() => setEditingId(null)}><X size={16} /> Cancel</button>
+      </> : <>
+        <button className="icon-action" onClick={() => startEdit(item)}><Edit3 size={16} /> Edit</button>
+        <button className="danger icon-action" onClick={() => remove('appointments', item.id)}><Trash2 size={16} /> Delete</button>
+      </>}</div></td>
+    </tr>;
+    })}</tbody>
   </table>;
 }
 
-function LeadsTable({ rows, update, remove }) {
+function LeadsTable({ rows, update, save, remove }) {
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState({});
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setDraft({
+      name: item.name,
+      email: item.email,
+      phone: item.phone,
+      status: item.status,
+    });
+  };
+  const saveEdit = async (id) => {
+    await save(id, draft);
+    setEditingId(null);
+    setDraft({});
+  };
   return <table>
     <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr></thead>
-    <tbody>{rows.length === 0 && <EmptyRow columns={5} message="No leads match the current filters." />}{rows.map(item => <tr key={item.id}>
-      <td>{item.name}</td><td>{item.email}</td><td>{item.phone}</td>
-      <td><select className="form-select form-select-sm" value={item.status} onChange={e => update(item.id, e.target.value)}>{leadStatuses.map(s => <option key={s}>{s}</option>)}</select></td>
-      <td><button className="danger" onClick={() => remove('leads', item.id)}><XCircle size={16} /> Remove</button></td>
-    </tr>)}</tbody>
+    <tbody>{rows.length === 0 && <EmptyRow columns={5} message="No leads match the current filters." />}{rows.map(item => {
+      const editing = editingId === item.id;
+      return <tr key={item.id}>
+      <td>{editing ? <input className="table-input" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /> : item.name}</td>
+      <td>{editing ? <input className="table-input" type="email" value={draft.email} onChange={e => setDraft({ ...draft, email: e.target.value })} /> : item.email}</td>
+      <td>{editing ? <input className="table-input" value={draft.phone} onChange={e => setDraft({ ...draft, phone: e.target.value })} /> : item.phone}</td>
+      <td><select className="form-select form-select-sm" value={editing ? draft.status : item.status} onChange={e => editing ? setDraft({ ...draft, status: e.target.value }) : update(item.id, e.target.value)}>{leadStatuses.map(s => <option key={s}>{s}</option>)}</select></td>
+      <td><div className="table-actions">{editing ? <>
+        <button className="primary icon-action" onClick={() => saveEdit(item.id)}><Check size={16} /> Save</button>
+        <button className="icon-action" onClick={() => setEditingId(null)}><X size={16} /> Cancel</button>
+      </> : <>
+        <button className="icon-action" onClick={() => startEdit(item)}><Edit3 size={16} /> Edit</button>
+        <button className="danger icon-action" onClick={() => remove('leads', item.id)}><XCircle size={16} /> Remove</button>
+      </>}</div></td>
+    </tr>;
+    })}</tbody>
   </table>;
 }
 
